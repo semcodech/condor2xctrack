@@ -27,7 +27,7 @@ import re
 import socket
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, UTC
 
 import serial
 
@@ -84,6 +84,7 @@ class NmeaSentence:
     def to_str(self):
         return f"${self._items_str}*{self.crc}\r\n"
 
+
 def format_message(msg):
     # pass through all NMEA sentences without furhter processing
     # except the ones we need to touch
@@ -93,10 +94,11 @@ def format_message(msg):
             # add missing date field in Condor2 NMEA RMC message
             m.items.insert(
                 RMC_DATE_FIELD_INDEX,
-                datetime.utcnow().date().strftime("%d%m%y"),
+                datetime.now(UTC).date().strftime("%d%m%y"),
             )
         msg = m.to_str().encode("ascii")
     return msg
+
 
 def forward_to_udp(config):
     out_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -108,12 +110,14 @@ def forward_to_udp(config):
             if not msg:
                 continue
             msg = format_message(msg)
-            out_socket.sendto(msg, (config.udp_server_ip, config.udp_server_port))
+            out_socket.sendto(
+                msg, (config.udp_server_ip, config.udp_server_port))
             # print(msg)
 
+
 def forward_to_serial(config):
-    with serial.Serial(config.input_serial_port, config.input_serial_baudrate, timeout=1) as ser_in, \
-         serial.Serial(config.ouput_serial_port, config.ouput_serial_baudrate, timeout=1) as ser_out:
+    with (serial.Serial(config.input_serial_port, config.input_serial_baudrate, timeout=1) as ser_in,
+          serial.Serial(config.output_serial_port, config.output_serial_baudrate, timeout=1) as ser_out):
         print("NMEA connector started, forwarding to serial (press Ctrl-c to stop)...")
         while True:
             msg = ser_in.readline()
@@ -123,9 +127,12 @@ def forward_to_serial(config):
             ser_out.write(msg)
             # print(msg)
 
+
 def process_nmea(config):
     if config.udp_server_ip:
         forward_to_udp(config)
+    else:
+        forward_to_serial(config)
 
 
 def main():
