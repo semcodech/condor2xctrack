@@ -49,15 +49,27 @@ NOTE: This connector is not fully tested, experiments were done on following set
 Start XCTrack, Condor2 and run the Python script.
 
 ```
-python condor2xctrack.py [--udp_server_port <XCTrack UDP port>] <XCTrack device IP> <Condor2 serial port> 
+python condor2xctrack.py <Condor2 serial port> --udp_server_ip=<XCTrack device IP> [--udp_server_port <XCTrack UDP port>] 
+OR  
+python condor2xctrack.py <Condor2 serial port> --output_serial_port=<XCTrack Serial Port> [--output_serial_baudrate <XCTrack Serial Baudrate>]   
 ```
 
-### Example
+### Example UDP
 
 XCTrack device IP: 192.168.1.123, XCTrack server port: default (10110), Condor2 COM port: CNCA0 (com0com)
 
 NOTE: Ensure you use CNCB0, not CNCA0 as set in Condor2.
 
 ```
-python condor2xctrack.py 192.168.1.123 \\.\CNCB0
+python condor2xctrack.py \\.\CNCB0 --udp_server_ip=192.168.1.123
+```
+
+### Example Serial
+
+XCTrack serial port: COM6, Condor2 COM port: CNCA0 (com0com)
+
+NOTE: Ensure you use CNCB0, not CNCA0 as set in Condor2.
+
+```
+python condor2xctrack.py \\.\CNCB0 --output_serial_port=COM6
 ```
