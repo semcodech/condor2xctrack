@@ -5,7 +5,7 @@ This script enables using the Condor2 NMEA interface as a
 basic external sensor with XCTrack.
 
 To this end, the script forwards Condor2 NMEA sentences received via
-the serial interface to the given UDP server.
+the serial interface to the given UDP server or serial port
 
 The following NMEA sentence manipulations are applied before forwarding:
 - Change GPRMC message to contain the date field value (field 9).
@@ -19,7 +19,14 @@ Example:
         virtual COM port "\\.\CNCB0", the script is started as
         follows.
 
-        $ python condor2xctrack.py 192.168.1.123 \\.\CNCB0
+        $ python condor2xctrack.py \\.\CNCB0 --udp_server_ip=192.168.1.123
+
+        Given XCTrack Serial Port COM6 and com0com
+        virtual COM port "\\.\CNCB0", the script is started as
+        follows.
+
+        $ python condor2xctrack.py \\.\CNCB0 --output_serial_port=COM6
+
 """
 
 import argparse
@@ -27,7 +34,7 @@ import re
 import socket
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, UTC
 
 import serial
 
@@ -35,7 +42,7 @@ import serial
 DEFAULT_UDP_SERVER_PORT = 10110
 
 # default baud rate of the source serial port (115200-8-N-1)
-DEFAULT_SERIAL_BAUDRATE = 115200
+DEFAULT_SERIAL_BAUDRATE = 4800
 
 # for the time being we only touch the RMC sentence
 # see http://www.nmea.de/nmea0183datensaetze.html#rmc
@@ -85,30 +92,55 @@ class NmeaSentence:
         return f"${self._items_str}*{self.crc}\r\n"
 
 
-def process_nmea(config):
+def format_message(msg):
+    # pass through all NMEA sentences without furhter processing
+    # except the ones we need to touch
+    if msg.startswith(b"$GPRMC,"):
+        m = NmeaSentence.from_str(msg.decode("ascii"))
+        if m.record_id == "GPRMC":
+            # add missing date field in Condor2 NMEA RMC message
+            m.items.insert(
+                RMC_DATE_FIELD_INDEX,
+                datetime.now(UTC).date().strftime("%d%m%y"),
+            )
+        msg = m.to_str().encode("ascii")
+    return msg
+
+
+def forward_to_udp(config):
     out_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    with serial.Serial(config.serial_port, config.serial_baudrate, timeout=1) as ser:
-        print("NMEA connector started (press Ctrl-c to stop)...")
+    with serial.Serial(config.input_serial_port, config.input_serial_baudrate, timeout=1) as ser:
+        print("NMEA connector started, forwarding to UDP (press Ctrl-c to stop)...")
+        msg_count = 0
         while True:
             msg = ser.readline()
             if not msg:
                 continue
-
-            # pass through all NMEA sentences without furhter processing
-            # except the ones we need to touch
-            if msg.startswith(b"$GPRMC,"):
-                m = NmeaSentence.from_str(msg.decode("ascii"))
-                if m.record_id == "GPRMC":
-                    # add missing date field in Condor2 NMEA RMC message
-                    m.items.insert(
-                        RMC_DATE_FIELD_INDEX,
-                        datetime.utcnow().date().strftime("%d%m%y"),
-                    )
-                msg = m.to_str().encode("ascii")
-
+            msg = format_message(msg)
             out_socket.sendto(msg, (config.udp_server_ip, config.udp_server_port))
-            # print(msg)
+            msg_count += 1 
+            print(f"Forwarded Messages: {msg_count}", end="\r")
+
+def forward_to_serial(config):
+    with (serial.Serial(config.input_serial_port, config.input_serial_baudrate, timeout=1) as ser_in,
+          serial.Serial(config.output_serial_port, config.output_serial_baudrate, timeout=1) as ser_out):
+        print("NMEA connector started, forwarding to serial (press Ctrl-c to stop)...")
+        msg_count = 0
+        while True:
+            msg = ser_in.readline()
+            if not msg:
+                continue
+            msg = format_message(msg)
+            ser_out.write(msg)
+            msg_count += 1 
+            print(f"Forwarded Messages: {msg_count}", end="\r")
+
+def process_nmea(config):
+    if config.udp_server_ip:
+        forward_to_udp(config)
+    else:
+        forward_to_serial(config)
 
 
 def main():
@@ -118,9 +150,36 @@ def main():
     )
 
     parser.add_argument(
-        "udp_server_ip",
+        "input_serial_port",
+        metavar="CONDOR_SERIAL_INTERFACE",
+        help="Serial port used for receiving Condor NMEA data",
+    )
+    parser.add_argument(
+        "--input_serial_baudrate",
+        metavar="CONDOR_SERIAL_BAUDRATE",
+        type=int,
+        default=DEFAULT_SERIAL_BAUDRATE,
+        help="Serial port baudrate",
+        required=False
+    )
+    parser.add_argument(
+        "--output_serial_port",
+        metavar="XCTRACK_SERIAL_INTERFACE",
+        help="Serial port used for receiving Condor NMEA data",
+    )
+    parser.add_argument(
+        "--output_serial_baudrate",
+        metavar="XCTRACK_SERIAL_BAUDRATE",
+        type=int,
+        default=DEFAULT_SERIAL_BAUDRATE,
+        help="Serial port baudrate",
+        required=False
+    )
+    parser.add_argument(
+        "--udp_server_ip",
         metavar="XCTRACK_IP",
         help="XCTrack target IP address (UDP server)",
+        required=False
     )
     parser.add_argument(
         "--udp_server_port",
@@ -128,20 +187,12 @@ def main():
         type=int,
         default=DEFAULT_UDP_SERVER_PORT,
         help="XCTrack target UDP port",
-    )
-    parser.add_argument(
-        "serial_port",
-        metavar="CONDOR_SERIAL_INTERFACE",
-        help="Serial port used for receiving Condor NMEA data",
-    )
-    parser.add_argument(
-        "--serial_baudrate",
-        metavar="CONDOR_SERIAL_BAUDRATE",
-        type=int,
-        default=DEFAULT_SERIAL_BAUDRATE,
-        help="Serial port baudrate",
+        required=False
     )
     args = parser.parse_args()
+
+    if ((not args.udp_server_ip) and (not args.output_serial_port)):
+        print("Please enter either a UDP address or serial port")
 
     try:
         return process_nmea(args)
